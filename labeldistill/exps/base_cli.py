@@ -1,12 +1,10 @@
-# Copyright (c) Megvii Inc. All rights reserved.
+#LabelDistill/labeldistill/exps/base_cli.py
 import os
 from argparse import ArgumentParser
-
 import pytorch_lightning as pl
-
+from pytorch_lightning.callbacks import ModelCheckpoint
 from labeldistill.callbacks.ema import EMACallback
 from labeldistill.utils.torch_dist import all_gather_object, synchronize
-
 from .nuscenes.base_exp import LabelDistillModel
 
 
@@ -38,23 +36,46 @@ def run_cli(model_class=LabelDistillModel,
                         max_epochs=extra_trainer_config_args.get('epochs', 24),
                         strategy='ddp',
                         num_sanity_val_steps=0,
-                        gradient_clip_val=5,
+                        gradient_clip_val=35,
+                        gradient_clip_algorithm='norm',  # 🆕 显式指定裁剪算法
                         limit_val_batches=0,
                         enable_checkpointing=True,
                         precision=16,
+                        reload_dataloaders_every_n_epochs=1,
                         default_root_dir=os.path.join('./outputs/', exp_name))
     args = parser.parse_args()
+    
     if args.seed is not None:
         pl.seed_everything(args.seed)
-
+    
     model = model_class(**vars(args))
+    
+    # 配置checkpoint回调，保留最后3个epoch的checkpoint
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join(args.default_root_dir, 'checkpoints'),
+        filename='epoch_{epoch:02d}',
+        save_top_k=3,  # 保留最后3个checkpoint
+        save_last=True,  # 额外保存一个last.ckpt（最新的）
+        monitor='epoch',  # 监控epoch
+        mode='max',  # 保留epoch数最大的3个
+        every_n_epochs=1,  # 每个epoch保存一次
+        save_on_train_epoch_end=True,  # 在训练epoch结束时保存
+    )
+    
     if use_ema:
         train_dataloader = model.train_dataloader()
         ema_callback = EMACallback(
             len(train_dataloader.dataset) * args.max_epochs)
-        trainer = pl.Trainer.from_argparse_args(args, callbacks=[ema_callback])
+        trainer = pl.Trainer.from_argparse_args(
+            args, 
+            callbacks=[ema_callback, checkpoint_callback]
+        )
     else:
-        trainer = pl.Trainer.from_argparse_args(args)
+        trainer = pl.Trainer.from_argparse_args(
+            args, 
+            callbacks=[checkpoint_callback]
+        )
+    
     if args.evaluate:
         trainer.test(model, ckpt_path=args.ckpt_path)
     elif args.predict:

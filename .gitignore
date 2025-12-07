@@ -1,0 +1,42 @@
+# 模型 checkpoints
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.pb
+*.bin
+*.safetensors
+checkpoints/
+checkpoint/
+weights/
+
+# 编译文件 (重要!)
+*.so
+*.o
+*.pyc
+build/
+*.egg-info/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 数据和输出 (重要!)
+data/
+dataset/
+outputs/
+
+# 第三方库
+mmdetection3d/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# 日志
+*.log

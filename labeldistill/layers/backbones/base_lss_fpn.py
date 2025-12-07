@@ -504,8 +504,12 @@ class BaseLSSFPN(nn.Module):
         """
         batch_size, num_sweeps, num_cams, num_channels, img_height, \
             img_width = sweep_imgs.shape
+        #sweep_imgs 形状: torch.Size([2, 1, 6, 3, 512, 1408])
+        #512和1408是输入的res101使用的图像尺寸
         img_feats = self.get_cam_feats(sweep_imgs)
         source_features = img_feats[:, 0, ...]
+        #torch.Size([2, 6, 512, 32, 88])  16倍下采样
+        
         depth_feature = self._forward_depth_net(
             source_features.reshape(batch_size * num_cams,
                                     source_features.shape[2],
@@ -513,23 +517,34 @@ class BaseLSSFPN(nn.Module):
                                     source_features.shape[4]),
             mats_dict,
         )
+        
+        #depth_feature 形状 torch.Size([12, 262, 32, 88])
+        
         depth = depth_feature[:, :self.depth_channels].softmax(
             dim=1, dtype=depth_feature.dtype)
+        #深度通道数 D (self.depth_channels): 112
+        #深度概率分布 'depth' 形状 torch.Size([12, 112, 32, 88]), dtype: torch.float16   已经使用过了softmax
         geom_xyz = self.get_geometry(
             mats_dict['sensor2ego_mats'][:, sweep_index, ...],
             mats_dict['intrin_mats'][:, sweep_index, ...],
             mats_dict['ida_mats'][:, sweep_index, ...],
             mats_dict.get('bda_mat', None),
         )
+       
+        #geom_xyz  torch.Size([2, 6, 112, 32, 88, 3])
+        
         geom_xyz = ((geom_xyz - (self.voxel_coord - self.voxel_size / 2.0)) /
                     self.voxel_size).int()
+        #体素网格大小 (self.voxel_num): [128, 128, 1]
+        #体素索引 'geom_xyz' 形状 (B, Ncams, D, Hf, Wf, 3): torch.Size([2, 6, 112, 32, 88, 3])
+        
         if self.training or self.use_da:
             img_feat_with_depth = depth.unsqueeze(
                 1) * depth_feature[:, self.depth_channels:(
                     self.depth_channels + self.output_channels)].unsqueeze(2)
-
+            
             img_feat_with_depth = self._forward_voxel_net(img_feat_with_depth)
-
+            #深度加权特征 'img_feat_with_depth' 形状 : torch.Size([12, 150, 112, 32, 88])
             img_feat_with_depth = img_feat_with_depth.reshape(
                 batch_size,
                 num_cams,
@@ -540,20 +555,22 @@ class BaseLSSFPN(nn.Module):
             )
 
             img_feat_with_depth = img_feat_with_depth.permute(0, 1, 3, 4, 5, 2)
-
+           #img_feat_with_depth: torch.Size([2, 6, 112, 32, 88, 150])
             feature_map = voxel_pooling_train(geom_xyz,
                                               img_feat_with_depth.contiguous(),
                                               self.voxel_num.cuda())
+            #feature_map: torch.Size([2, 150, 128, 128])
         else:
             feature_map = voxel_pooling_inference(
                 geom_xyz, depth, depth_feature[:, self.depth_channels:(
                     self.depth_channels + self.output_channels)].contiguous(),
                 self.voxel_num.cuda())
+            
         if is_return_depth:
             # final_depth has to be fp32, otherwise the depth
             # loss will colapse during the traing process.
             return feature_map.contiguous(
-            ), depth_feature[:, :self.depth_channels].softmax(dim=1)
+            ), depth_feature[:, :self.depth_channels]
         return feature_map.contiguous()
 
     def forward(self,

@@ -34,6 +34,7 @@ bev_neck_conf = dict(type='SECONDFPN',
                      upsample_strides=[2, 4, 8],
                      out_channels=[64, 64, 128])
 
+
 @numba.jit(nopython=True)
 def size_aware_circle_nms(dets, thresh_scale, post_max_size=83):
     """Circular NMS.
@@ -167,8 +168,19 @@ class KDHead(CenterHead):
             if i in self.trunk.out_indices:
                 trunk_outs.append(x)
         fpn_output = self.neck(trunk_outs)
+        #  fpn_output Shape: torch.Size([4, 256, 128, 128])
+        '''
+        trunk_outs
+         [0] Shape: torch.Size([4, 450, 128, 128])
+         [1] Shape: torch.Size([4, 300, 64, 64])
+         [2] Shape: torch.Size([4, 600, 32, 32])
+         [3] Shape: torch.Size([4, 1200, 16, 16])
+        
+        '''
+    
         ret_values = super().forward(fpn_output)
-        return ret_values, trunk_outs[:2]
+        
+        return ret_values, trunk_outs[:2],fpn_output
 
     def get_targets(self, gt_bboxes_3d, gt_labels_3d):
         """Generate targets.
@@ -560,6 +572,104 @@ class KDHead(CenterHead):
             response_loss += loss_bbox_distill
             response_loss += loss_heatmap_distill
         return det_loss, response_loss
+
+    def distill_loss(self, targets, preds_dicts, teacher_dicts):
+        heatmaps, anno_boxes, inds, masks = targets
+        distillation_loss =  0
+   
+        for task_id, (preds_dict, teacher_dict) in enumerate(zip(preds_dicts, teacher_dicts)):
+        # Apply sigmoid to both student and teacher heatmaps
+            preds_dict[0]['heatmap'] = clip_sigmoid(preds_dict[0]['heatmap'])
+            teacher_dict[0]['heatmap'] = clip_sigmoid(teacher_dict[0]['heatmap'])
+        
+        # Calculate average factor for normalization
+            num_pos = heatmaps[task_id].eq(1).float().sum().item()
+            cls_avg_factor = torch.clamp(reduce_mean(
+                 heatmaps[task_id].new_tensor(num_pos)),
+                                     min=1).item()
+        
+        # Heatmap distillation loss - student learns from teacher heatmap
+            loss_heatmap_distill = self.loss_cls(
+                preds_dict[0]['heatmap'].type(torch.float32),
+                teacher_dict[0]['heatmap'].type(torch.float32) * heatmaps[task_id],
+                avg_factor=cls_avg_factor
+        )
+        
+        # Reconstruct anno_box for both student and teacher
+            if 'vel' in preds_dict[0].keys():
+                preds_dict[0]['anno_box'] = torch.cat(
+                   (preds_dict[0]['reg'], preds_dict[0]['height'],
+                    preds_dict[0]['dim'], preds_dict[0]['rot'],
+                    preds_dict[0]['vel']),
+                    dim=1,
+                 )
+                teacher_dict[0]['anno_box'] = torch.cat(
+                   (teacher_dict[0]['reg'], teacher_dict[0]['height'],
+                 teacher_dict[0]['dim'], teacher_dict[0]['rot'],
+                 teacher_dict[0]['vel']),
+                   dim=1,
+                  )
+            else:
+                preds_dict[0]['anno_box'] = torch.cat(
+                     (preds_dict[0]['reg'], preds_dict[0]['height'],
+                     preds_dict[0]['dim'], preds_dict[0]['rot']),
+                   dim=1,
+                  )
+                teacher_dict[0]['anno_box'] = torch.cat(
+                    (teacher_dict[0]['reg'], teacher_dict[0]['height'],
+                    teacher_dict[0]['dim'], teacher_dict[0]['rot']),
+                     dim=1,
+                  )
+        
+        # Prepare for bbox distillation loss
+            num = masks[task_id].float().sum()
+            ind = inds[task_id]
+        
+        # Gather student predictions
+            pred = preds_dict[0]['anno_box'].permute(0, 2, 3, 1).contiguous()
+            pred = pred.view(pred.size(0), -1, pred.size(3))
+            pred = self._gather_feat(pred, ind)
+        
+        # Gather teacher predictions
+            teacher = teacher_dict[0]['anno_box'].permute(0, 2, 3, 1).contiguous()
+            teacher = teacher.view(teacher.size(0), -1, teacher.size(3))
+            teacher = self._gather_feat(teacher, ind)
+           
+        # Create mask and weights for bbox loss
+            target_box = anno_boxes[task_id]
+            mask = masks[task_id].unsqueeze(2).expand_as(target_box).float()
+            num = torch.clamp(reduce_mean(target_box.new_tensor(num)), min=1e-4).item()
+            isnotnan = (~torch.isnan(target_box)).float()
+            mask *= isnotnan
+            code_weights = self.train_cfg['code_weights']
+            bbox_weights = mask * mask.new_tensor(code_weights)
+        
+        # Bbox distillation loss - student learns from teacher bbox predictions
+            loss_bbox_distill = self.loss_bbox(
+            pred,
+            teacher,
+            bbox_weights,
+            avg_factor=num
+                 )
+        
+        # Accumulate distillation losses
+            distillation_loss += loss_heatmap_distill
+            distillation_loss += loss_bbox_distill
+        
+        return distillation_loss
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     def get_bboxes(self, preds_dicts, img_metas, img=None, rescale=False):
         """Generate bboxes from bbox head predictions.

@@ -1,4 +1,4 @@
-# Copyright (c) Megvii Inc. All rights reserved.
+#labeldistill/exps/nuscenes/base_exp.py
 import os
 from functools import partial
 
@@ -196,6 +196,7 @@ class LabelDistillModel(LightningModule):
                  ida_aug_conf=ida_aug_conf,
                  bda_aug_conf=bda_aug_conf,
                  default_root_dir='./outputs/',
+                 use_train_val=False,  # 新增参数:是否使用train+val数据集
                  **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -209,6 +210,7 @@ class LabelDistillModel(LightningModule):
         self.head_conf = head_conf
         self.ida_aug_conf = ida_aug_conf
         self.bda_aug_conf = bda_aug_conf
+        self.use_train_val = use_train_val  # 保存参数
         mmcv.mkdir_or_exist(default_root_dir)
         self.default_root_dir = default_root_dir
         self.evaluator = DetNuscEvaluator(class_names=self.class_names,
@@ -380,11 +382,19 @@ class LabelDistillModel(LightningModule):
         return [[optimizer], [scheduler]]
 
     def train_dataloader(self):
+        # 根据use_train_val参数决定使用哪些数据
+        if self.use_train_val:
+            # 使用train+val数据集
+            info_paths = [self.train_info_paths, self.val_info_paths]
+        else:
+            # 仅使用train数据集
+            info_paths = self.train_info_paths
+            
         train_dataset = NuscDetDataset(ida_aug_conf=self.ida_aug_conf,
                                        bda_aug_conf=self.bda_aug_conf,
                                        classes=self.class_names,
                                        data_root=self.data_root,
-                                       info_paths=self.train_info_paths,
+                                       info_paths=info_paths,
                                        is_train=True,
                                        use_cbgs=self.data_use_cbgs,
                                        img_conf=self.img_conf,
