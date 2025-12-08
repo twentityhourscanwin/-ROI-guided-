@@ -1,12 +1,18 @@
 看到这篇文章的朋友你好，如果你是HR，请看以下内容：
-本项目基于pytorch-lightning 主要三个脚本
+
+本项目基于pytorch-lightning 主要三个脚本：
 LabelDistill/labeldistill/exps/nuscenes/labeldistill/LidarDistill_r50_128x128_e24_4keyfp.py（核心）
+
 LabelDistill/labeldistill/exps/nuscenes/base_exp.py
+
 LabelDistill/labeldistill/exps/base_cli.py
+
 使用ROI改进蒸馏策略的核心代码在 如下路径LabelDistill/labeldistill/refine_head/target_assigner
-因为idea是从kitti数据集上二阶段微调框的策略中获取的灵感，所以文件夹用来这个名字来作为纪念
-整个项目独立完成，参考项目：
+
+因为idea是从kitti数据集上二阶段微调框的策略中获取的灵感，所以文件夹用来这个名字来作为纪念，整个项目独立完成，参考项目：
+
 https://github.com/sanmin0312/LabelDistill/tree/master/labeldistill
+
 https://github.com/Megvii-BaseDetection/BEVDepth/tree/main/bevdepth/exps/nuscenes
 
 
